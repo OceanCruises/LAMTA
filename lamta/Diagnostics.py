@@ -1,16 +1,13 @@
-from scipy.interpolate import interp2d,interpn,dfitpack,griddata
+from scipy.interpolate import interpn,RegularGridInterpolator
+
 import numpy as np
 import datetime as dt
 import warnings
 import sys
 import glob
-# Spasso spec
+
+# Spasso spec ???
 #import GlobalVars, Fields, PlotField, Library
-
-##tests
-#import matplotlib.pyplot as plt
-#from mpl_toolkits.basemap import Basemap
-
 
 class Lagrangian():
     
@@ -63,46 +60,50 @@ class Lagrangian():
                 
         return out
     
-    def backonsphere(self,x,y):
-        x = np.array(x).astype('float64')
-        y = np.array(y).astype('float64')
-        
-        #zonal
+    def backonsphere(self, x, y):
+        x = np.asarray(x, dtype="float64")
+        y = np.asarray(y, dtype="float64")
+
+        # --- zonal (pole crossing) ---
         pos90p = y > 90
         pos90m = y < -90
-        if self.PeriodicBC == False:
-            if any(pos90p):
+
+        if self.PeriodicBC is False:
+            if pos90p.any():
                 y[pos90p] = np.nan
-            if any(pos90m):
+            if pos90m.any():
                 y[pos90m] = np.nan
         else:
-            if any(pos90p):
+            if pos90p.any():
                 y[pos90p] = 180 - y[pos90p]
                 x[pos90p] = x[pos90p] + 180
-            if any(pos90m):
-                print(y[pos90m==True])
-                if all([ v < -180 for v in y[pos90m==True]]):
-                    print(y[pos90m==True])
-                    y[pos90m==True] = np.nan
+            if pos90m.any():
+                if np.all(y[pos90m] < -180):
+                    y[pos90m] = np.nan
                 else:
-                    y[pos90m] = -180 - y[pos90p]
+                    y[pos90m] = -180 - y[pos90m]   # FIX
                     x[pos90m] = x[pos90m] + 180
-        
-        #meridional
-        lon = self.lon
+
+        # --- meridional (periodic lon wrap) ---
+        lon = np.asarray(self.lon, dtype="float64")
+        span = lon[-1] - lon[0]
+
         xm = x < lon[0]
         xp = x > lon[-1]
-        if self.PeriodicBC == False:
-            if xm.any:
+
+        if self.PeriodicBC is False:
+            if xm.any():  # FIX: call the method
                 x[xm] = np.nan
-            if xp.any:
+            if xp.any():  # FIX
                 x[xp] = np.nan
         else:
-            if xm.any:
-                x[xm] += lon[-1] - lon[0]
-            if xp.any:
-                x[xp] -= lon[-1] - lon[0]
-        return x,y
+            if xm.any():  # FIX
+                x[xm] += span
+            if xp.any():  # FIX
+                x[xp] -= span
+
+        return x, y
+
 
     def interpf_2fields(self,t,x,y,**kwargs):
         udim, vdim = np.asarray(self.us), np.asarray(self.vs)
@@ -130,41 +131,149 @@ class Lagrangian():
             vs_in = interpn((self.dates,self.lons[0,:],self.lats[:,0]),self.vs,new_grid,bounds_error=False,fill_value=np.nan)
         return us_in,vs_in
 
-    def interpf(self,t,x,y,**kwargs):
-        udim, vdim = np.asarray(self.u_nonan), np.asarray(self.v_nonan)
-        if np.size(t)!=np.size(x):
-            t = np.tile(t,len(x))
+    def _unique_sorted_axis(axis, A, B=None, axis_index=0):
+        axis = np.asarray(axis).astype(float)
+
+        order = np.argsort(axis)
+        axis_s = axis[order]
+        A_s = np.take(A, order, axis=axis_index)
+        B_s = np.take(B, order, axis=axis_index) if B is not None else None
+
+        axis_u, first_idx = np.unique(axis_s, return_index=True)  # removes duplicates
+        A_u = np.take(A_s, first_idx, axis=axis_index)
+        B_u = np.take(B_s, first_idx, axis=axis_index) if B_s is not None else None
+
+        return axis_u, A_u, B_u
+
+    def interpf(self, t, x, y, **kwargs):
+        udim = np.asarray(self.u_nonan)
+        vdim = np.asarray(self.v_nonan)
+
+        if np.size(t) != np.size(x):
+            t = np.tile(t, len(x))
+
+        # -------------------------
+        # 2D velocity field
+        # -------------------------
         if udim.ndim == 2 and vdim.ndim == 2:
-            if 'coordinates' in kwargs and kwargs['coordinates']=='spherical':
-                xn,yn = Lagrangian.backonsphere(self,x,y)
-                new_grid = list(zip(xn,yn))
+
+            # coordinates handling
+            if 'coordinates' in kwargs and kwargs['coordinates'] == 'spherical':
+                xg, yg = Lagrangian.backonsphere(self, x, y)
+                new_grid = list(zip(xg, yg))
             else:
-                new_grid = list(zip(x,y))
+                new_grid = list(zip(x, y))
+
+            # get lon / lat axes
             if self.lon.ndim == 2:
-                lon,lat = self.lon[:,0],self.lat[0,:]
+                lon = np.asarray(self.lon[:, 0]).astype(float)
+                lat = np.asarray(self.lat[0, :]).astype(float)
             else:
-                lon,lat = self.lon,self.lat
-            u_in = interpn((lon,lat),self.u_nonan,new_grid,bounds_error=False,fill_value=np.nan)
-            v_in = interpn((lon,lat),self.v_nonan,new_grid,bounds_error=False,fill_value=np.nan)
-        elif udim.ndim == 3 and udim.ndim == 3:
-            if 'coordinates' in kwargs and kwargs['coordinates']=='spherical':
-                xn,yn = Lagrangian.backonsphere(self,x,y)
-                new_grid = list(zip(t,xn,yn))
+                lon = np.asarray(self.lon).astype(float)
+                lat = np.asarray(self.lat).astype(float)
+
+            U = np.asarray(self.u_nonan)
+            V = np.asarray(self.v_nonan)
+
+            # handle (lat,lon) vs (lon,lat)
+            if U.shape == (len(lat), len(lon)):
+                U = U.T
+                V = V.T
+
+            # ---- enforce strictly monotone axes (interpn requirement) ----
+            # longitude
+            ix = np.argsort(lon)
+            lon = lon[ix]
+            U = U[ix, :]
+            V = V[ix, :]
+
+            lon, iuniq = np.unique(lon, return_index=True)
+            U = U[iuniq, :]
+            V = V[iuniq, :]
+
+            # latitude
+            iy = np.argsort(lat)
+            lat = lat[iy]
+            U = U[:, iy]
+            V = V[:, iy]
+
+            lat, iuniq = np.unique(lat, return_index=True)
+            U = U[:, iuniq]
+            V = V[:, iuniq]
+
+            u_in = interpn((lon, lat), U, new_grid,
+                        bounds_error=False, fill_value=np.nan)
+            v_in = interpn((lon, lat), V, new_grid,
+                        bounds_error=False, fill_value=np.nan)
+
+        # -------------------------
+        # 3D velocity field (time, lon, lat)
+        # -------------------------
+        elif udim.ndim == 3 and vdim.ndim == 3:
+
+            if 'coordinates' in kwargs and kwargs['coordinates'] == 'spherical':
+                xg, yg = Lagrangian.backonsphere(self, x, y)
+                new_grid = list(zip(t, xg, yg))
             else:
-                new_grid = list(zip(t,x,y))
-            u_in = interpn((self.dates,self.lon,self.lat),self.u_nonan,new_grid,bounds_error=False,fill_value=np.nan)
-            v_in = interpn((self.dates,self.lon,self.lat),self.v_nonan,new_grid,bounds_error=False,fill_value=np.nan)
-        return u_in,v_in
+                new_grid = list(zip(t, x, y))
+
+            u_in = interpn((self.dates, self.lon, self.lat),
+                        self.u_nonan, new_grid,
+                        bounds_error=False, fill_value=np.nan)
+            v_in = interpn((self.dates, self.lon, self.lat),
+                        self.v_nonan, new_grid,
+                        bounds_error=False, fill_value=np.nan)
+
+        else:
+            raise ValueError("Unsupported dimensions for u/v fields")
+
+        return u_in, v_in
+
     
-    def interp2d_pairs(*args,**kwargs):
-        """ Same interface as interp2d but the returned interpolant will evaluate its inputs as pairs of values.
-        """
-        # Internal function, that evaluates pairs of values, output has the same shape as input
-        def interpolant(x,y,f):
-            x,y = np.asarray(x), np.asarray(y)
-            return (dfitpack.bispeu(f.tck[0], f.tck[1], f.tck[2], f.tck[3], f.tck[4], x.ravel(), y.ravel())[0]).reshape(x.shape)
-        # Wrapping the scipy interp2 function to call out interpolant instead
-        return lambda x,y: interpolant(x,y,interp2d(*args,**kwargs))
+    def interp2d_pairs(*args, **kwargs):
+        """Same interface as interp2d but the returned interpolant evaluates inputs as pairs (x[i], y[i])."""
+        lon, lat, var = args[0], args[1], args[2]
+        kind = kwargs.get("kind", "linear")
+
+        lon = np.asarray(lon).copy()
+        lat = np.asarray(lat).copy()
+        var = np.asarray(var)
+
+        if lon.ndim != 1 or lat.ndim != 1 or var.ndim != 2:
+            raise ValueError("interp2d_pairs expects lon, lat as 1D arrays and var as a 2D array.")
+
+        # Handle var orientation (accept either (nlat,nlon) or (nlon,nlat))
+        if var.shape == (lon.size, lat.size):
+            var = var.T  # -> (nlat, nlon)
+
+        # Ensure increasing axes
+        if np.any(np.diff(lon) < 0):
+            ix = np.argsort(lon)
+            lon = lon[ix]
+            var = var[:, ix]
+        if np.any(np.diff(lat) < 0):
+            iy = np.argsort(lat)
+            lat = lat[iy]
+            var = var[iy, :]
+
+        method = "linear" if kind == "linear" else "nearest"
+
+        rgi = RegularGridInterpolator(
+            (lat, lon), var,
+            method=method,
+            bounds_error=False,
+            fill_value=np.nan,
+        )
+
+        def f(x, y):
+            x = np.asarray(x)
+            y = np.asarray(y)
+            pts = np.column_stack([y.ravel(), x.ravel()])  # (lat, lon)
+            out = rgi(pts)
+            return out.reshape(x.shape)
+
+        return f
+
 
     def rk1flatstep(self,t,x,y,f,h): 
         xp,yp=f(self,t,x,y) #with mathematical formalism, this is d(pts)/dt, or pts', that is, ptsp
@@ -306,30 +415,30 @@ class Lagrangian():
              
         return lladv
     
-    def SSTADV(self,trjf,**kwargs):
+    def SSTADV(self, trjf, **kwargs):
         """ Compute SST advection from lon/lat advection
         :param lladv: lon/lat advection (returned from 'LLADV')
-        
+
         :output sstadv: lons/lats are longitudes and latitudes for mapping; lonf_map and latf_map are longitude and latitude advections respectively formatted for mapping.
         """
         trjx = trjf['trjx']
         trjy = trjf['trjy']
         lons = trjf['lons']
         lats = trjf['lats']
-        
+
         if 'dayv' in kwargs:
             dayv = kwargs['dayv']
         else:
             print("Missing 'dayv' argument", file=sys.stderr)
-        
-        if 'PeriodicBC' in kwargs and kwargs['PeriodicBC']==True:
+
+        if 'PeriodicBC' in kwargs and kwargs['PeriodicBC'] == True:
             if self.loni[1] < self.loni[0]:
                 lons0 = lons
-                lons0[lons0<0] += 360
+                lons0[lons0 < 0] += 360
         else:
-            lons0 = lons                
+            lons0 = lons
 
-        #compute lon/lat adv at (t0 - n)
+        # compute lon/lat adv at (t0 - n)
         if 'daysst' in kwargs:
             day = kwargs['daysst']
         else:
@@ -338,64 +447,93 @@ class Lagrangian():
             else:
                 day = 3
                 warnings.warn("Warning: 'daysst' is not defined -> using default value (3)")
-        iday = (day * kwargs['numstep'])+1
-        [Xs,Ys]=np.meshgrid(lons0,lats)
+
+        iday = (day * kwargs['numstep']) + 1
+        [Xs, Ys] = np.meshgrid(lons0, lats)
+
         lonf = np.asarray(trjx)
         latf = np.asarray(trjy)
-        lonf,latf = lonf[iday,:],latf[iday,:]
-        lonf_map=np.reshape(lonf,(np.shape(Xs)[0],np.shape(Xs)[1]))
-        latf_map=np.reshape(latf,(np.shape(Xs)[0],np.shape(Xs)[1]))
+        lonf, latf = lonf[iday, :], latf[iday, :]
+
+        lonf_map = np.reshape(lonf, (np.shape(Xs)[0], np.shape(Xs)[1]))
+        latf_map = np.reshape(latf, (np.shape(Xs)[0], np.shape(Xs)[1]))
         lonf_map = lonf_map.flatten()
         latf_map = latf_map.flatten()
-        
-        if 'PeriodicBC' in kwargs and kwargs['PeriodicBC']==True:
-            if self.loni[1] < self.loni[0]:
-                lonf_map[lonf_map>180] -= 360
 
-        #load sst map at (t0 - n)
+        if 'PeriodicBC' in kwargs and kwargs['PeriodicBC'] == True:
+            if self.loni[1] < self.loni[0]:
+                lonf_map[lonf_map > 180] -= 360
+
+        # load sst map at (t0 - n)
+        lon, lat, var = None, None, None
         if 'sstfield' in kwargs:
             field = kwargs['sstfield']
-            lon = field['lon']
-            lat = field['lat']
-            var = field['sst']
+            lon = np.asarray(field['lon'])
+            lat = np.asarray(field['lat'])
+            var = np.asarray(field['sst'])
         elif 'GlobalVars' in sys.modules.keys():
-            nprod = GlobalVars.config.get('products',GlobalVars.Lag['sstprod']+'prod')
-            fname = glob.glob(GlobalVars.Dir['dir_wrk']+'/*'+nprod+'*.nc')
+            nprod = GlobalVars.config.get('products', GlobalVars.Lag['sstprod'] + 'prod')
+            fname = glob.glob(GlobalVars.Dir['dir_wrk'] + '/*' + nprod + '*.nc')
             if fname:
-                field = eval('Fields.'+nprod+'(fname[0]).loadnc()')
-                lon = field['lon']
-                lat = field['lat']
-                var = field['var']
+                field = eval('Fields.' + nprod + '(fname[0]).loadnc()')
+                lon = np.asarray(field['lon'])
+                lat = np.asarray(field['lat'])
+                var = np.asarray(field['var'])
             else:
-                lon,lat,var = [],[],[]
                 warntxt = "Warning: No SST file, sst advection is empty."
                 warnings.warn(warntxt)
-                Library.Logfile(warntxt)
+                if 'Library' in sys.modules.keys():
+                    Library.Logfile(warntxt)
         else:
             warnings.warn('Missing SST field.')
-        
-        if var.any:
-            # Create the interpolant (same interface as interp2d)
-            f = Lagrangian.interp2d_pairs(lon,lat,var,kind='linear')
+
+        # Compute SST advection
+        if (var is not None) and np.size(var) > 0 and np.any(np.isfinite(var)):
+            # Wrap advected longitudes to match SST grid convention (0..360)
+            if np.nanmin(lon) >= 0 and np.nanmax(lon) > 180:
+                lonf_map = (lonf_map + 360) % 360
+
+            # ---- normalise lon/lat/var for interp2d_pairs (expects lon,lat 1D; var 2D) ----
+            lon = np.asarray(lon)
+            lat = np.asarray(lat)
+            var = np.asarray(var)
+
+            # If lon/lat are 2D meshgrids, reduce to 1D axes
+            if lon.ndim == 2 and lat.ndim == 2:
+                lon = lon[0, :]
+                lat = lat[:, 0]
+
+            # Drop singleton dims (common: var is (1, nlat, nlon))
+            var = np.squeeze(var)
+
+            # If still 3D (e.g. multiple times), take first time slice
+            if var.ndim == 3:
+                var = var[0, :, :]
+
+            # Create the interpolant (pairs of points)
+            f = Lagrangian.interp2d_pairs(lon, lat, var, kind='linear')
+
             # Evaluate the interpolant on each pairs of x and y values
-            sst = f(lonf_map,latf_map)
-            sst_map = np.reshape(sst,(np.shape(Xs)[0],np.shape(Xs)[1]))
+            sst = f(lonf_map, latf_map)
+            sst_map = np.reshape(sst, (np.shape(Xs)[0], np.shape(Xs)[1]))
         else:
-            sst_map = np.zeros((np.shape(Xs)[0],np.shape(Xs)[1]))
-         
-        sstadv = {'lons':lons,'lats':lats,'sstadv':sst_map}
-        
+            sst_map = np.zeros((np.shape(Xs)[0], np.shape(Xs)[1]))
+
+        sstadv = {'lons': lons, 'lats': lats, 'sstadv': sst_map}
+
         ### saving ###
-        if 'output' in kwargs and kwargs['output']=='netcdf':
+        if 'output' in kwargs and kwargs['output'] == 'netcdf':
             if 'GlobalVars' in sys.modules.keys():
                 prod = kwargs['product']
-                date = dt.datetime.strftime(dt.datetime.strptime(dayv,'%Y-%m-%d'),'%Y%m%d')
-                fname = GlobalVars.Dir['dir_wrk']+date+'_'+prod+'_SSTADV.nc'
-                title = prod + 'SST ADVECTION '+date
-                Fields.SSTADV(fname).createnc(lons,lats,sst_map,title)
+                date = dt.datetime.strftime(dt.datetime.strptime(dayv, '%Y-%m-%d'), '%Y%m%d')
+                fname = GlobalVars.Dir['dir_wrk'] + date + '_' + prod + '_SSTADV.nc'
+                title = prod + 'SST ADVECTION ' + date
+                Fields.SSTADV(fname).createnc(lons, lats, sst_map, title)
             else:
                 warnings.warn("Warning: Use Save.py to save your data")
+
         return sstadv
+
     
     def FTLE(self,trjf,**kwargs):
         lons = trjf['lons']
@@ -534,7 +672,6 @@ class Lagrangian():
         # lonsd = Xs + coef * np.cos(theta)
         # latsd = Ys + coef * np.sin(theta)
         
-        
         #lonsd = Xs + (Xs - lonf_map)
         #latsd = Ys + (Ys - latf_map)
         
@@ -633,27 +770,28 @@ class Lagrangian():
             Library.toc('OWTRAJ')   
         return owdisp
     
-    def TIMEFROMBATHY(self,trjf,**kwargs):
+    def TIMEFROMBATHY(self, trjf, **kwargs):
         lons = trjf['lons']
         lats = trjf['lats']
         trjx = np.asarray(trjf['trjx'])
         trjy = np.asarray(trjf['trjy'])
-                
+
         if 'dayv' in kwargs:
             dayv = kwargs['dayv']
         else:
             print("Missing 'dayv' argument (format: %Y-%m-%d) to compute OWTRAJ", file=sys.stderr)
-             
-        if 'PeriodicBC' in kwargs and kwargs['PeriodicBC']==True:
+
+        if 'PeriodicBC' in kwargs and kwargs['PeriodicBC'] == True:
             if self.loni[1] < self.loni[0]:
-                trjx[trjx<0] += 360
-                
-        #extract grid from bathy file in subdomain
+                trjx = trjx.copy()
+                trjx[trjx < 0] += 360
+
+        # extract grid from bathy file in subdomain
         if 'bathyfield' in kwargs:
             field = kwargs['bathyfield']
-            lon = field['lon']
-            lat = field['lat']
-            z = field['z']
+            lon = np.asarray(field['lon'])
+            lat = np.asarray(field['lat'])
+            z = np.asarray(field['z'])
             trjx = trjx[1::kwargs['numstep']]
             trjy = trjy[1::kwargs['numstep']]
             bathylvl = kwargs['bathylvl']
@@ -661,61 +799,60 @@ class Lagrangian():
             trjx = trjx[1::GlobalVars.Lag['numstep']]
             trjy = trjy[1::GlobalVars.Lag['numstep']]
             bathylvl = GlobalVars.Lag['bathylvl']
-            file = GlobalVars.Dir['dir_bathy']+GlobalVars.Lag['bathyfile']
-            field = Fields.ETOPO.loadnc(file,rlon=GlobalVars.Lag['loni'],rlat=GlobalVars.Lag['lati'])
-            lon = field['lon']
-            lat = field['lat']
-            z = field['z']
+            file = GlobalVars.Dir['dir_bathy'] + GlobalVars.Lag['bathyfile']
+            field = Fields.ETOPO.loadnc(file, rlon=GlobalVars.Lag['loni'], rlat=GlobalVars.Lag['lati'])
+            lon = np.asarray(field['lon'])
+            lat = np.asarray(field['lat'])
+            z = np.asarray(field['z'])
         else:
             print("Missing bathymetry field: bathyfield = field", file=sys.stderr)
+            lon, lat, z = None, None, None
 
-        if min(lon)<0 and min([min(l) for l in trjf['trjx'][1:]])>0:
-            lon[lon<0] += 360
-        
-        # Create the interpolant (same interface as interp2d)
-        f = Lagrangian.interp2d_pairs(lon,lat,z,kind='linear')
-        # Evaluate the interpolant on each pairs of x and y values
-        trjd = f(trjx,trjy)
-        
+        if (lon is not None) and (np.size(lon) > 0) and (np.nanmin(lon) < 0) and (np.nanmin(trjx) > 0):
+            lon = lon.copy()
+            lon[lon < 0] += 360
+
+        # Compute bathy along trajectories
+        if (z is not None) and (np.size(z) > 0) and np.any(np.isfinite(z)):
+            # Wrap traj longitudes to match bathy lon convention (0..360)
+            if np.nanmin(lon) >= 0 and np.nanmax(lon) > 180:
+                trjx = (trjx + 360) % 360
+
+            f = Lagrangian.interp2d_pairs(lon, lat, z, kind='linear')
+            trjd = f(trjx, trjy)
+        else:
+            trjd = np.full_like(trjx, np.nan, dtype=float)
+
         touched = []
         nottouched = []
-        for ct in range(0,np.shape(trjx)[1]):
-            touch = [i for i,v in enumerate(trjd[:,ct]) if v > bathylvl]
-            if not touch: 
-                touch=0 #not touched
+        for ct in range(0, np.shape(trjx)[1]):
+            touch = [i for i, v in enumerate(trjd[:, ct]) if v > bathylvl]
+            if not touch:
+                touch = 0  # not touched
                 nottouched.append(ct)
-            else: 
+            else:
                 touch = min(touch)
             touched.append(touch)
-        
+
         touchedlat = []
         touchedlon = []
+        for ct in range(0, len(touched)):
+            touchedlat.append(trjy[touched[ct], ct])
+            touchedlon.append(trjx[touched[ct], ct])
 
-        for ct in range(0,len(touched)):
-            touchedlat.append(trjy[touched[ct],ct])
-            touchedlon.append(trjx[touched[ct],ct])
+        touched = np.asarray(touched, dtype=float)
+        touchedlat = np.asarray(touchedlat, dtype=float)
+        touchedlon = np.asarray(touchedlon, dtype=float)
 
-        touched,touchedlat,touchedlon = np.asarray(touched,dtype=float),np.asarray(touchedlat,dtype=float),np.asarray(touchedlon,dtype=float)
         touched[nottouched] = np.nan
         touchedlat[nottouched] = np.nan
         touchedlon[nottouched] = np.nan
-        
-        touched = touched.reshape((len(lats),len(lons)))
-        touchedlat = touchedlat.reshape((len(lats),len(lons)))
-        touchedlon = touchedlon.reshape((len(lats),len(lons)))
-        
-        timfbathy = {'lons':lons,'lats':lats,'timfb':touched,'latfb':touchedlat,'lonfb':touchedlon}
-        
-        ### saving ###
-        if 'output' in kwargs and kwargs['output']=='netcdf':
-            if 'GlobalVars' in sys.modules.keys():
-                prod = kwargs['product']
-                date = dt.datetime.strftime(dt.datetime.strptime(dayv,'%Y-%m-%d'),'%Y%m%d')
-                fname = GlobalVars.Dir['dir_wrk']+date+'_'+prod+'_TIMEFROMBATHY.nc'
-                title = prod + 'Time from Bathy '+date
-                Fields.TIMEFROMBATHY(fname).createnc(lons,lats,touched,title,vvar2=touchedlat,vvar3=touchedlon)
-            else:
-                warnings.warn("Warning: Use Save.py to save your data")
+
+        touched = touched.reshape((len(lats), len(lons)))
+        touchedlat = touchedlat.reshape((len(lats), len(lons)))
+        touchedlon = touchedlon.reshape((len(lats), len(lons)))
+
+        timfbathy = {'lons': lons, 'lats': lats, 'timfb': touched, 'latfb': touchedlat, 'lonfb': touchedlon}
         return timfbathy
     
 
@@ -984,6 +1121,36 @@ class Eulerian():
             print("Missing 'dayv' argument to compute Eulerian diag. Default value is used (i.e. last date of field)", file=sys.stderr)
         return
     
+    @staticmethod
+    def _interp2d_rgi(lon0, lat0, field2d, lon_new, lat_new, method="linear"):
+        lon0 = np.asarray(lon0).copy()
+        lat0 = np.asarray(lat0).copy()
+        field2d = np.asarray(field2d)
+
+        # Accept either (nlat, nlon) or (nlon, nlat)
+        if field2d.shape == (lon0.size, lat0.size):
+            field2d = field2d.T  # -> (nlat, nlon)
+
+        # Ensure increasing axes
+        if np.any(np.diff(lon0) < 0):
+            ix = np.argsort(lon0)
+            lon0 = lon0[ix]
+            field2d = field2d[:, ix]
+        if np.any(np.diff(lat0) < 0):
+            iy = np.argsort(lat0)
+            lat0 = lat0[iy]
+            field2d = field2d[iy, :]
+
+        rgi = RegularGridInterpolator(
+            (lat0, lon0), field2d,
+            method=method, bounds_error=False, fill_value=np.nan
+        )
+
+        Lon, Lat = np.meshgrid(lon_new, lat_new)  # (nlat_new, nlon_new)
+        pts = np.column_stack([Lat.ravel(), Lon.ravel()])
+        out = rgi(pts).reshape(Lat.shape)
+        return out
+    
     def diag(self,diag=None,**kwargs):
         out = []
         if diag!=None:
@@ -993,127 +1160,101 @@ class Eulerian():
                 out.append(dd)         
         return out
     
-    def KE(self,**kwargs):
+    def KE(self, **kwargs):
         if self.u.ndim == 2:
             U = self.u
             V = self.v
         elif self.u.ndim == 3:
-                day = dt.datetime.toordinal(dt.datetime.strptime(self.dayv,'%Y-%m-%d').date())
-                idd = np.where(self.dates == day)
-                U = np.squeeze(self.u[idd,:,:])
-                V = np.squeeze(self.v[idd,:,:])
-        if 'UVunit' in kwargs:
-            if kwargs['UVunit']=='m/s':
-                Ucms,Vcms = U*1e2,V*1e2
-            if kwargs['UVunit']=='cm/s':
-                Ucms,Vcms = U,V
+            day = dt.datetime.toordinal(dt.datetime.strptime(self.dayv, '%Y-%m-%d').date())
+            idd = np.where(self.dates == day)
+            U = np.squeeze(self.u[idd, :, :])
+            V = np.squeeze(self.v[idd, :, :])
 
-        if 'delta' and 'lon' and 'lat' in kwargs:
+        if 'UVunit' in kwargs:
+            if kwargs['UVunit'] == 'm/s':
+                Ucms, Vcms = U * 1e2, V * 1e2
+            if kwargs['UVunit'] == 'cm/s':
+                Ucms, Vcms = U, V
+
+        if ('delta' in kwargs) and ('lon' in kwargs) and ('lat' in kwargs):
             delta0 = kwargs['delta']
             loni = kwargs['lon']
             lati = kwargs['lat']
-            lon = np.arange(loni[0],loni[1],delta0/2)
-            lat = np.arange(lati[0],lati[1],delta0/2)
-            [X,Y] = np.meshgrid(lon,lat)
+            lon = np.arange(loni[0], loni[1], delta0 / 2)
+            lat = np.arange(lati[0], lati[1], delta0 / 2)
+            [X, Y] = np.meshgrid(lon, lat)
+
             lon0 = np.array(self.lon)
             lat0 = np.array(self.lat)
-            u_nonan = np.where(np.isnan(Ucms),0,Ucms)
-            v_nonan = np.where(np.isnan(Vcms),0,Vcms)
-    
-            if np.shape(u_nonan) == (lat0.size,lon0.size):
-                fu = interp2d(lon0,lat0,u_nonan, kind='cubic')
-                fv = interp2d(lon0,lat0,v_nonan, kind='cubic')
-            elif np.shape(u_nonan) == (lon0.size,lat0.size):
-                fu = interp2d(lon0,lat0,u_nonan.T, kind='cubic')
-                fv = interp2d(lon0,lat0,v_nonan.T, kind='cubic')
-            Ucms = fu(lon, lat)
-            Vcms = fv(lon, lat)
+            u_nonan = np.where(np.isnan(Ucms), 0, Ucms)
+            v_nonan = np.where(np.isnan(Vcms), 0, Vcms)
+
+            Ucms = self._interp2d_rgi(lon0, lat0, u_nonan, lon, lat, method="linear")
+            Vcms = self._interp2d_rgi(lon0, lat0, v_nonan, lon, lat, method="linear")
         else:
             print("Missing 'delta', 'lon' and 'lat' arguments to compute Eulerian diag.", file=sys.stderr)
 
-        E = (Ucms**2) + (Vcms**2)
-        
-        ### saving ###
-        if 'output' in kwargs and kwargs['output']=='netcdf':
-            if 'GlobalVars' in sys.modules.keys():
-                prod = kwargs['product']
-                date = dt.datetime.strftime(dt.datetime.strptime(self.dayv,'%Y-%m-%d'),'%Y%m%d')
-                fname = GlobalVars.Dir['dir_wrk']+date+'_'+prod+'_KE.nc'
-                title = prod + 'KE '+date
-                Fields.KE(fname).createnc(lon,lat,E,title)
-            else:
-                warnings.warn("Warning: Use Save.py to save your data")
-                
-        KE = {'lon':X,'lat':Y,'KE':E}
+        E = (Ucms ** 2) + (Vcms ** 2)
+        KE = {'lon': X, 'lat': Y, 'KE': E}
         return KE
     
-    def OW(self,**kwargs):
+    def OW(self, **kwargs):
         if self.u.ndim == 2:
             U = self.u
             V = self.v
         elif self.u.ndim == 3:
-                day = dt.datetime.toordinal(dt.datetime.strptime(self.dayv,'%Y-%m-%d').date())
-                idd = np.where(self.dates == day)
-                U = np.squeeze(self.u[idd,:,:])
-                V = np.squeeze(self.v[idd,:,:])
-        [X,Y]=np.meshgrid(self.lon,self.lat)
-        if np.shape(X)!=np.shape(U): [Y,X]=np.meshgrid(self.lat,self.lon)
+            day = dt.datetime.toordinal(dt.datetime.strptime(self.dayv, '%Y-%m-%d').date())
+            idd = np.where(self.dates == day)
+            U = np.squeeze(self.u[idd, :, :])
+            V = np.squeeze(self.v[idd, :, :])
+
+        [X, Y] = np.meshgrid(self.lon, self.lat)
+        if np.shape(X) != np.shape(U):
+            [Y, X] = np.meshgrid(self.lat, self.lon)
+
         if 'UVunit' in kwargs:
-            if kwargs['UVunit']=='m/s':
-                Ucms,Vcms = U*1e2,V*1e2
-            if kwargs['UVunit']=='cm/s':
-                Ucms,Vcms = U,V
-        if 'delta' and 'lon' and 'lat' in kwargs:
+            if kwargs['UVunit'] == 'm/s':
+                Ucms, Vcms = U * 1e2, V * 1e2
+            if kwargs['UVunit'] == 'cm/s':
+                Ucms, Vcms = U, V
+
+        if ('delta' in kwargs) and ('lon' in kwargs) and ('lat' in kwargs):
             delta0 = kwargs['delta']
             loni = kwargs['lon']
             lati = kwargs['lat']
-            lon = np.arange(loni[0],loni[1],delta0/2)
-            lat = np.arange(lati[0],lati[1],delta0/2)
-            [X,Y] = np.meshgrid(lon,lat)
+            lon = np.arange(loni[0], loni[1], delta0 / 2)
+            lat = np.arange(lati[0], lati[1], delta0 / 2)
+            [X, Y] = np.meshgrid(lon, lat)
+
             lon0 = np.array(self.lon)
             lat0 = np.array(self.lat)
-            u_nonan = np.where(np.isnan(Ucms),0,Ucms)
-            v_nonan = np.where(np.isnan(Vcms),0,Vcms)
-            if np.shape(u_nonan) == (lat0.size,lon0.size):
-                fu = interp2d(lon0,lat0,u_nonan, kind='cubic')
-                fv = interp2d(lon0,lat0,v_nonan, kind='cubic')
-            elif np.shape(u_nonan) == (lon0.size,lat0.size):
-                fu = interp2d(lon0,lat0,u_nonan.T, kind='cubic')
-                fv = interp2d(lon0,lat0,v_nonan.T, kind='cubic')
-            Ucms = fu(lon, lat)
-            Vcms = fv(lon, lat)
+            u_nonan = np.where(np.isnan(Ucms), 0, Ucms)
+            v_nonan = np.where(np.isnan(Vcms), 0, Vcms)
+
+            Ucms = self._interp2d_rgi(lon0, lat0, u_nonan, lon, lat, method="linear")
+            Vcms = self._interp2d_rgi(lon0, lat0, v_nonan, lon, lat, method="linear")
         else:
             print("Missing 'delta', 'lon' and 'lat' arguments to compute Eulerian diag.", file=sys.stderr)
 
-        dUdy,dUdx = np.gradient(Ucms)
-        dVdy,dVdx = np.gradient(Vcms)
-        
-        tmp,Dx = np.gradient(X/180*np.pi*self.RT*np.cos(Y*np.pi/180))
-        Dy,tmp = np.gradient(Y/180*np.pi*self.RT)
-        
-        dUdx = dUdx/Dx
-        dVdx = dVdx/Dx
-        dUdy = dUdy/Dy
-        dVdy = dVdy/Dy 
-        
+        # ... keep the rest of OW exactly as you have it ...
+        dUdy, dUdx = np.gradient(Ucms)
+        dVdy, dVdx = np.gradient(Vcms)
+
+        tmp, Dx = np.gradient(X / 180 * np.pi * self.RT * np.cos(Y * np.pi / 180))
+        Dy, tmp = np.gradient(Y / 180 * np.pi * self.RT)
+
+        dUdx = dUdx / Dx
+        dVdx = dVdx / Dx
+        dUdy = dUdy / Dy
+        dVdy = dVdy / Dy
+
         sn = dUdx - dVdy
         ss = dUdy + dVdx
         vor = -dUdy + dVdx
         ow = sn**2 + ss**2 - vor**2
-        ow = ow*(60*60*24)**2 #daily
-        
-        ### saving ###
-        if 'output' in kwargs and kwargs['output']=='netcdf':
-            if 'GlobalVars' in sys.modules.keys():
-                prod = kwargs['product']
-                date = dt.datetime.strftime(dt.datetime.strptime(self.dayv,'%Y-%m-%d'),'%Y%m%d')
-                fname = GlobalVars.Dir['dir_wrk']+date+'_'+prod+'_OW.nc'
-                title = prod + 'OW '+date
-                Fields.OW(fname).createnc(lon,lat,ow,title)
-            else:
-                warnings.warn("Warning: Use Save.py to save your data")
+        ow = ow * (60 * 60 * 24) ** 2  # daily
 
-        OW = {'lon':X,'lat':Y,'sn':sn,'ss':ss,'vor':vor,'ow':ow}
+        OW = {'lon': X, 'lat': Y, 'sn': sn, 'ss': ss, 'vor': vor, 'ow': ow}
         return OW
 
 #Spasso spec   
