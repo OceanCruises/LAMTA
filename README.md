@@ -18,6 +18,6 @@ LAMTA development has been supported by the following organisations:
 - LOCEAN (Laboratoire d'Océanographie et du Climat: Expérimentations et Approches Numériques), Sorbonne University
 - CNES (Centre National d'Études Spatiales)
 
-### Acknowledgements : faire aussi le truc contributors de echopype
+### Acknowledgements
 
 LAMTA developement benefited from the remarkable coding efforts of Louise Rousselet, Francesco d'Ovidio and Gina Fifani.
