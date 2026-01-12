@@ -1,0 +1,7 @@
+[tool.ruff]
+line-length = 130
+
+[tool.ruff.lint]
+select = ["E", "F"]
+ignore = ["E711", "E712"]
+per-file-ignores = { "lamta/Diagnostics.py" = ["F821", "F841"] }

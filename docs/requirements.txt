@@ -1,6 +1,8 @@
 sphinx>=7,<9
 pydata-sphinx-theme
 myst-parser
+pytest
+pytest-cov
 
 numpy
 scipy

@@ -104,4 +104,3 @@ The development of LAMTA has benefited from the remarkable coding efforts and sc
 - Louise Rousselet
 - Francesco d’Ovidio
 - Gina Fifani
-
