@@ -18,6 +18,7 @@ Tutorials and example workflows are provided as Jupyter notebooks and are
 documented separately in the
 [**LAMTA Examples documentation**](https://lamta-examples.readthedocs.io/).
 
+These examples are designed to run against a local installation of LAMTA and are not a standalone package.s
 To run the tutorials make sure that:
 
 - LAMTA is installed in the same Python environment (preferably in editable mode)
@@ -80,8 +81,18 @@ We recommend using Visual Studio Code and opening the parent folder (e.g. `lamta
 
 ### Step 1 — Clone the repository
 
+```{warning}
+If you only want to run the notebooks, cloning the repository is sufficient.
+If you plan to contribute to the code or documentation, we recommend forking the repository first and cloning your fork instead.
+```
+
 ```bash
-git clone https://github.com/OceanCruises/LAMTA.git
+# Users
+git clone https://github.com/OceanCruises/LAMTA_examples
+
+# Contributors
+# git clone https://github.com/<your-username>/LAMTA_examples
+
 cd LAMTA
 ```
 
