@@ -22,15 +22,13 @@ Rousselet, L., d’Ovidio, F., Izard, L., Della Penna, A., Petrenko, A., Barrill
 
 ## Using LAMTA with the examples
 
-Tutorials and example workflows are provided as Jupyter notebooks and are documented separately in the [**LAMTA Examples documentation**](https://lamta-examples.readthedocs.io/).
+Tutorials and example workflows are provided as Jupyter notebooks in the separate [**LAMTA Examples repository**](https://github.com/OceanCruises/LAMTA_examples) and are documented in the [**LAMTA Examples documentation**](https://lamta-examples.readthedocs.io/).
 
-These examples are designed to run against a local installation of LAMTA and are not a standalone package. To run the tutorials make sure that:
+If your goal is to run the tutorial notebooks, follow the installation instructions provided in the LAMTA Examples documentation.
 
-- LAMTA is installed in the same Python environment (preferably in editable mode)
+The dedicated `lamta_examples` environment contains the notebook and plotting dependencies, and installing `LAMTA_examples` also installs LAMTA automatically.
 
-- that environment is selected as the active Python kernel (Jupyter, VS Code, etc.)
-
-This setup ensures that the examples always run against your local version of LAMTA. The examples include:
+The examples include:
 
 - Initialising and advecting particles in analytical flows
 - Working with `ParticleSet`
@@ -50,23 +48,54 @@ pip install lamta
 
 will **not work** at this stage.
 
-LAMTA must therefore be installed **from source**, either for local use or for development.
+LAMTA must therefore be installed from source.
+
+### Step 1 — Clone LAMTA
+
+```{warning}
+If you plan to contribute to the code or documentation, we recommend forking the repository first and cloning your fork instead.
+```
+
+```bash
+# Users
+git clone https://github.com/OceanCruises/LAMTA
+
+# Contributors
+# git clone https://github.com/<your-username>/LAMTA
+
+cd LAMTA
+```
+
+### Step 2 — Create and activate a Python environment
+
+Using **Conda**:
+
+```bash
+conda create -n lamta python=3.12
+conda activate lamta
+```
+
+### Step 3 — Install LAMTA
+
+From the root of the cloned repository:
+
+```bash
+python -m pip install -e .
+```
+
+This installs LAMTA and its required Python dependencies in editable mode. Any modification to the local source code will therefore be immediately reflected when importing LAMTA.
+
+You can verify the installation with:
+
+```bash
+python -c "import lamta; print('LAMTA import OK')"
+```
 
 ---
 
-## Recommended installation (local / development)
+## Developing LAMTA with the examples
 
-This installation mode is recommended if you want to:
-
-- run the LAMTA tutorials and examples
-- explore or modify the code
-- develop new diagnostics or workflows
-
-The installation is performed in *editable* mode so that the local source tree is directly linked to your Python environment.
-
-## Development environment
-
-Recommended local setup (both repositories side-by-side):
+If you are developing LAMTA itself and want to test your changes directly in the example notebooks, we recommend keeping both repositories side-by-side:
 
 ```text
 lamta_dev/
@@ -74,52 +103,19 @@ lamta_dev/
 └─ LAMTA_examples/  # notebooks
 ```
 
-This keeps the library and the examples aligned during development.
-
-## VS Code
-
-We recommend using Visual Studio Code and opening the parent folder (e.g. `lamta_dev/`) so both repositories are available in a single workspace. This makes it easy to edit the LAMTA source code and immediately test changes in the example notebooks, while keeping navigation and Git operations clear.
+We recommend using Visual Studio Code and opening the parent folder (for example `lamta_dev/`) so both repositories are available in the same workspace.
 
 - [VS Code](https://code.visualstudio.com/)
 - [VS Code workspaces](https://code.visualstudio.com/docs/editor/multi-root-workspaces)
 
-
-### Step 1 — Clone the repositories
-
-```{warning}
-If you plan to contribute to the code or documentation, we recommend forking the corresponding repository first and cloning your fork instead.
-```
+Create the examples environment following the LAMTA Examples documentation, then install your local LAMTA checkout into that environment:
 
 ```bash
-# Users
-git clone https://github.com/OceanCruises/LAMTA
-git clone https://github.com/OceanCruises/LAMTA_examples
-
-# Contributors
-# git clone https://github.com/<your-username>/LAMTA
-# git clone https://github.com/<your-username>/LAMTA_examples
-
-cd LAMTA
+conda activate lamta_examples
+python -m pip install -e ../LAMTA
 ```
 
-### Step 2 — Create and activate a Python environment
-
-Using **Conda** (recommended):
-
-```bash
-conda create -n lamta python=3.12
-conda activate lamta
-```
-
-### Step 3 — Install LAMTA in editable mode
-
-From the root of the cloned repository:
-
-```bash
-pip install -e .
-```
-
-This links LAMTA to your local source directory. Any modification to the code will be immediately reflected when importing LAMTA in Python, scripts, or notebooks.
+This replaces the GitHub-installed version of LAMTA with your local editable checkout. Changes made to the local LAMTA source code will then be immediately available in the notebooks.
 
 ---
 
